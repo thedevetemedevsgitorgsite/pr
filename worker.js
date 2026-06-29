@@ -1,13 +1,5 @@
-// worker.js - Deploy to Cloudflare Workers
-// This worker securely handles template previews
-
 import { createClient } from '@supabase/supabase-js';
 import JSZip from 'jszip';
-
-// ── Configuration (set these as environment variables in Cloudflare Dashboard) ──
-const SUPABASE_URL = env.SUPABASE_URL;
-const SUPABASE_ANON_KEY = env.SUPABASE_ANON_KEY;
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ── CORS headers ──
 const corsHeaders = {
@@ -17,7 +9,7 @@ const corsHeaders = {
 };
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     // Handle CORS preflight
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: corsHeaders });
@@ -29,26 +21,27 @@ export default {
 
     // ── Route: /preview – returns the rendered preview ──
     if (path === '/preview' && postId) {
-      return handlePreview(postId);
+      return handlePreview(postId, env);
     }
 
     // ── Route: /readme – returns the README content ──
     if (path === '/readme' && postId) {
-      return handleReadme(postId);
+      return handleReadme(postId, env);
     }
 
-    // ── Route: /info – returns product info (name, price, etc.) ──
+    // ── Route: /info – returns product info ──
     if (path === '/info' && postId) {
-      return handleInfo(postId);
+      return handleInfo(postId, env);
     }
 
     return new Response('Not found', { status: 404, headers: corsHeaders });
   },
 };
 
-// ── Get product info ──
-async function handleInfo(postId) {
+// ── Helper functions receive `env` ──
+async function handleInfo(postId, env) {
   try {
+    const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY);
     const { data: post, error } = await supabase
       .from('posts')
       .select('id, name, file_path, cover, price, user_id')
@@ -58,16 +51,16 @@ async function handleInfo(postId) {
     if (error || !post) {
       return jsonResponse({ error: 'Product not found' }, 404);
     }
-
     return jsonResponse(post);
   } catch (err) {
     return jsonResponse({ error: err.message }, 500);
   }
 }
 
-// ── Get preview HTML ──
-async function handlePreview(postId) {
+async function handlePreview(postId, env) {
   try {
+    const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY);
+
     // 1. Fetch post record
     const { data: post, error: postErr } = await supabase
       .from('posts')
@@ -78,7 +71,6 @@ async function handlePreview(postId) {
     if (postErr || !post) {
       return jsonResponse({ error: 'Product not found' }, 404);
     }
-
     if (!post.file_path) {
       return jsonResponse({ error: 'No file available' }, 404);
     }
@@ -98,7 +90,6 @@ async function handlePreview(postId) {
     if (!resp.ok) {
       return jsonResponse({ error: 'Download failed' }, 500);
     }
-
     const buffer = await resp.arrayBuffer();
 
     // 4. Check if it's a zip
@@ -123,7 +114,7 @@ async function handlePreview(postId) {
       return jsonResponse({ error: 'No HTML entry found' }, 404);
     }
 
-    // 7. Build blob map (for asset rewriting)
+    // 7. Build blob map (data URIs)
     const baseDir = entryFile.includes('/') ? entryFile.split('/').slice(0, -1).join('/') + '/' : '';
     const blobMap = {};
 
@@ -158,9 +149,9 @@ async function handlePreview(postId) {
   }
 }
 
-// ── Get README content ──
-async function handleReadme(postId) {
+async function handleReadme(postId, env) {
   try {
+    const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY);
     const { data: post, error: postErr } = await supabase
       .from('posts')
       .select('file_path')
@@ -184,10 +175,8 @@ async function handleReadme(postId) {
     if (!resp.ok) {
       return jsonResponse({ error: 'Download failed' }, 500);
     }
-
     const buffer = await resp.arrayBuffer();
 
-    // Check if it's a zip
     const magic = new Uint8Array(buffer.slice(0, 4));
     if (magic[0] !== 0x50 || magic[1] !== 0x4B) {
       return jsonResponse({ error: 'Not a zip file' }, 400);
@@ -196,7 +185,6 @@ async function handleReadme(postId) {
     const zip = await JSZip.loadAsync(buffer);
     const allFiles = Object.keys(zip.files).filter(f => !zip.files[f].dir);
 
-    // Find README
     const candidates = ['README.md', 'readme.md', 'README.txt', 'readme.txt', 'README', 'readme'];
     let readmeContent = null;
     let readmeName = null;
@@ -241,8 +229,7 @@ async function handleReadme(postId) {
   }
 }
 
-// ── Helpers ──
-
+// ── Helper functions (unchanged from previous) ──
 function findEntryHTML(files) {
   const priorities = ['index.html', 'main.html', 'home.html', 'index.htm', 'main.htm'];
   for (const name of priorities) {
@@ -285,7 +272,6 @@ function resolvePath(path, baseDir) {
 
 function rewriteHTML(html, baseDir, blobMap, entryPath) {
   const entryDir = entryPath.includes('/') ? entryPath.split('/').slice(0, -1).join('/') + '/' : '';
-
   const basenameMap = {};
   for (const [key, url] of Object.entries(blobMap)) {
     const base = key.split('/').pop();
