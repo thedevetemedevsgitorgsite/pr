@@ -1,0 +1,10 @@
+# wrangler.toml
+name = 'preview-worker'
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+# Set your secret via CLI (never put the real key here):
+# npx wrangler secret put GEMINI_API_KEY
+
+[vars]
+# Public vars only — API key goes in secrets, not here
