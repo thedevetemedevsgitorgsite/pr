@@ -2,7 +2,6 @@
   "name": "pr",
   "version": "1.0.0",
   "dependencies": {
-    "@supabase/supabase-js": "^2.45.0",
-    "jszip": "^3.10.1"
+    "@supabase/supabase-js": "^2.45.0"
   }
 }
