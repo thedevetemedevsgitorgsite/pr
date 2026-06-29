@@ -10,7 +10,6 @@ const corsHeaders = {
 
 export default {
   async fetch(request, env, ctx) {
-    // Handle CORS preflight
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: corsHeaders });
     }
@@ -19,17 +18,12 @@ export default {
     const path = url.pathname;
     const postId = url.searchParams.get('id');
 
-    // ── Route: /preview – returns the rendered preview ──
     if (path === '/preview' && postId) {
       return handlePreview(postId, env);
     }
-
-    // ── Route: /readme – returns the README content ──
     if (path === '/readme' && postId) {
       return handleReadme(postId, env);
     }
-
-    // ── Route: /info – returns product info ──
     if (path === '/info' && postId) {
       return handleInfo(postId, env);
     }
@@ -38,7 +32,7 @@ export default {
   },
 };
 
-// ── Helper functions receive `env` ──
+// ── handleInfo (unchanged) ──
 async function handleInfo(postId, env) {
   try {
     const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY);
@@ -57,11 +51,11 @@ async function handleInfo(postId, env) {
   }
 }
 
+// ── handlePreview – now returns raw HTML on success ──
 async function handlePreview(postId, env) {
   try {
     const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY);
 
-    // 1. Fetch post record
     const { data: post, error: postErr } = await supabase
       .from('posts')
       .select('id, name, file_path')
@@ -75,7 +69,6 @@ async function handlePreview(postId, env) {
       return jsonResponse({ error: 'No file available' }, 404);
     }
 
-    // 2. Get signed URL
     const { data: signedData, error: signErr } = await supabase
       .storage
       .from('uploads')
@@ -85,36 +78,38 @@ async function handlePreview(postId, env) {
       return jsonResponse({ error: 'Could not access file' }, 500);
     }
 
-    // 3. Fetch the file
     const resp = await fetch(signedData.signedUrl);
     if (!resp.ok) {
       return jsonResponse({ error: 'Download failed' }, 500);
     }
     const buffer = await resp.arrayBuffer();
 
-    // 4. Check if it's a zip
     const magic = new Uint8Array(buffer.slice(0, 4));
     const isZip = magic[0] === 0x50 && magic[1] === 0x4B;
 
     if (!isZip) {
       const text = new TextDecoder().decode(buffer);
       if (text.trimStart().startsWith('<')) {
-        return jsonResponse({ type: 'html', html: text });
+        // Return raw HTML
+        return new Response(text, {
+          status: 200,
+          headers: {
+            'Content-Type': 'text/html; charset=utf-8',
+            ...corsHeaders,
+          },
+        });
       }
       return jsonResponse({ error: 'Unsupported file format' }, 400);
     }
 
-    // 5. Unzip and process
     const zip = await JSZip.loadAsync(buffer);
     const allFiles = Object.keys(zip.files).filter(f => !zip.files[f].dir);
 
-    // 6. Find entry HTML
     const entryFile = findEntryHTML(allFiles);
     if (!entryFile) {
       return jsonResponse({ error: 'No HTML entry found' }, 404);
     }
 
-    // 7. Build blob map (data URIs)
     const baseDir = entryFile.includes('/') ? entryFile.split('/').slice(0, -1).join('/') + '/' : '';
     const blobMap = {};
 
@@ -127,7 +122,6 @@ async function handlePreview(postId, env) {
       blobMap[fname] = `data:${mime};base64,${base64}`;
     }
 
-    // 8. Process CSS files (rewrite url() to data URIs)
     const cssFiles = allFiles.filter(f => f.endsWith('.css'));
     for (const cssPath of cssFiles) {
       try {
@@ -137,11 +131,17 @@ async function handlePreview(postId, env) {
       } catch (_) { /* keep original */ }
     }
 
-    // 9. Rewrite HTML
     const htmlRaw = await zip.files[entryFile].async('string');
     const rewrittenHtml = rewriteHTML(htmlRaw, baseDir, blobMap, entryFile);
 
-    return jsonResponse({ type: 'html', html: rewrittenHtml });
+    // ── Return raw HTML, not JSON ──
+    return new Response(rewrittenHtml, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+        ...corsHeaders,
+      },
+    });
 
   } catch (err) {
     console.error('Preview error:', err);
@@ -149,6 +149,7 @@ async function handlePreview(postId, env) {
   }
 }
 
+// ── handleReadme (unchanged, returns JSON) ──
 async function handleReadme(postId, env) {
   try {
     const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_ANON_KEY);
@@ -229,7 +230,7 @@ async function handleReadme(postId, env) {
   }
 }
 
-// ── Helper functions (unchanged from previous) ──
+// ── Helper functions (unchanged) ──
 function findEntryHTML(files) {
   const priorities = ['index.html', 'main.html', 'home.html', 'index.htm', 'main.htm'];
   for (const name of priorities) {
@@ -376,10 +377,13 @@ function rewriteCSS(css, baseDir, blobMap) {
   return result;
 }
 
-return new Response(rewrittenHtml, {
-  status: 200,
-  headers: {
-    'Content-Type': 'text/html; charset=utf-8',
-    ...corsHeaders,
-  },
-});
+// ── JSON response helper (for errors and info) ──
+function jsonResponse(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      ...corsHeaders,
+    },
+  });
+}
