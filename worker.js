@@ -376,12 +376,10 @@ function rewriteCSS(css, baseDir, blobMap) {
   return result;
 }
 
-function jsonResponse(data, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      'Content-Type': 'application/json',
-      ...corsHeaders,
-    },
-  });
-}
+return new Response(rewrittenHtml, {
+  status: 200,
+  headers: {
+    'Content-Type': 'text/html; charset=utf-8',
+    ...corsHeaders,
+  },
+});
